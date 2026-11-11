@@ -378,6 +378,8 @@ export class VoipClient extends EventEmitter {
           const peerJid = String(info.peer_jid ?? info.peerJid ?? info.creator_jid ?? "");
           const call = new ActiveCall(callId, this.#engine!, 0);
           this.#trackCall(call);
+          // Backstop: if a ringing call is never accepted and no end state arrives, free the slot.
+          setTimeout(() => { if (call.state === CallState.ReceivedCall) call._forceEnd("missed"); }, 60_000).unref();
           this.emit("incoming", call, { peerJid, info });
         }
         this.#activeCall?._updateState(callState);
