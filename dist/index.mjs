@@ -253,6 +253,14 @@ export class VoipClient extends EventEmitter {
                         resolveOpen();
                         return;
                     }
+                    if (process.env.CALL_DEBUG && update.connection) {
+                        console.log("[call] connection", update.connection, update.lastDisconnect?.error?.output?.statusCode ?? "");
+                    }
+                    if (update.connection === "close" && opened) {
+                        // After open there is no auto-reconnect: tell the app so it can reconnect or restart.
+                        this.emit("disconnected", update.lastDisconnect?.error?.output?.statusCode);
+                        return;
+                    }
                     if (update.connection === "close" && !opened) {
                         const statusCode = update.lastDisconnect?.error?.output?.statusCode;
                         const shouldReconnect = statusCode === 515 || statusCode === DisconnectReason?.restartRequired;
