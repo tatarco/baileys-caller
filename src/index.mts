@@ -382,6 +382,7 @@ export class VoipClient extends EventEmitter {
           setTimeout(() => { if (call.state === CallState.ReceivedCall) call._forceEnd("missed"); }, 60_000).unref();
           this.emit("incoming", call, { peerJid, info });
         }
+        this.#activeCall?.emit("info", info); // raw call_info: participants, group_jid, is_group_call, ...
         this.#activeCall?._updateState(callState);
       } catch {}
     } else if (eventType === 156 && eventData) {

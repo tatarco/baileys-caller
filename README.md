@@ -123,6 +123,7 @@ Returned by `client.call()`. Extends `EventEmitter`.
 | `audio`     | `Float32Array`  | 16 kHz mono PCM frame from the remote peer    |
 | `ended`     | `string`        | Call ended (`hangup`, `timeout`, `rejected`)  |
 | `error`     | `Error`         | Fatal error                                   |
+| `info`      | `object`        | Raw WASM `call_info` on every state update (participants, `group_jid`, ...) |
 
 #### Methods
 
