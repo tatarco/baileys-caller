@@ -330,6 +330,8 @@ export class WasmEngine {
         this.#initialized = true;
     };
     isInitialized = () => this.#initialized;
+    /** Raw WASM module, for calling exports this wrapper does not cover yet. */
+    get raw() { return this.#instance; }
     destroy = () => {
         this.#stopAudioPlaybackLoop();
         if (this.#instance && typeof this.#instance.endCall === "function") {
@@ -433,6 +435,11 @@ export class WasmEngine {
             tcToken?.delete?.();
         }
     };
+    /** Accept the ringing inbound call. Mirrors WA Web's accept click (mic on, camera off). */
+    acceptCall = (audio = true, video = false) => {
+        this.#ensureInitialized();
+        return this.#instance.acceptCall(audio, video);
+    };
     endCall = (reason = 0, sendTerminate = true) => {
         this.#ensureInitialized();
         this.#instance.endCall(reason, sendTerminate);
@@ -449,7 +456,9 @@ export class WasmEngine {
         this.#ensureInitialized();
         const tcTokenList = this.#createUint8List(msg.tcToken);
         try {
-            this.#instance.handleIncomingSignalingOffer(msg.payload, String(msg.peerPlatform ?? 0), String(msg.peerAppVersion ?? "0"), String(msg.epochId ?? "0"), String(msg.timestamp ?? "0"), msg.isOffline ?? false, msg.isOfferNotContact ?? false, String(msg.peerJid), tcTokenList);
+            const rc = this.#instance.handleIncomingSignalingOffer(msg.payload, String(msg.peerPlatform ?? 0), String(msg.peerAppVersion ?? "0"), String(msg.epochId ?? "0"), String(msg.timestamp ?? "0"), msg.isOffline ?? false, msg.isOfferNotContact ?? false, String(msg.peerJid), tcTokenList);
+            if (process.env.CALL_DEBUG)
+                console.log("[call] handleIncomingSignalingOffer ->", rc);
         }
         finally {
             tcTokenList?.delete?.();

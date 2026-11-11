@@ -118,7 +118,7 @@ export class SignalingBridge {
   processIncomingCall = (node: any, voip: any, activeCallId: string): void => {
     this.#incomingSignalingQueue = this.#incomingSignalingQueue
       .then(() => this.#doProcessIncomingCall(node, voip, activeCallId))
-      .catch(() => {});
+      .catch((e) => { if (process.env.CALL_DEBUG) console.error("[call] incoming signaling failed:", e); });
   };
 
   processIncomingReceipt = (node: any, voip: any, activeCallId: string): void => {
@@ -354,6 +354,14 @@ export class SignalingBridge {
     const timestamp = voipChild.attrs.t ?? node.attrs.t ?? "0";
     const offline = !!(voipChild.attrs.offline ?? node.attrs.offline);
 
+    // Baileys decodes `user:0@lid` (AD_JID) as `user@lid`, and re-encodes that as a JID_PAIR the
+    // WASM reads back as `user:0@s.whatsapp.net` -> "mismatched peer id and creator id" -> offer dropped.
+    // An explicit `:0` makes Baileys re-encode it as an AD_JID with the LID domain.
+    const creator = voipChild.attrs["call-creator"];
+    if (typeof creator === "string" && creator.endsWith("@lid") && !creator.includes(":")) {
+      voipChild.attrs["call-creator"] = creator.replace("@lid", ":0@lid");
+    }
+
     let usableNode = voipChild;
     if (getBinaryNodeChild(voipChild, "enc")) {
       usableNode = await this.#maybeDecryptEnc(voipChild, senderDeviceJid);
@@ -385,9 +393,13 @@ export class SignalingBridge {
 
     switch (usableNode.tag) {
       case "offer":
+        if (process.env.CALL_DEBUG) {
+          const tree = (n: any, d = 0): string => `${"  ".repeat(d)}<${n.tag} ${Object.keys(n.attrs ?? {}).join(",")}>${Array.isArray(n.content) ? "\n" + n.content.map((c: any) => tree(c, d + 1)).join("\n") : n.content ? ` [${n.content.length}B]` : ""}`;
+          console.log("[call] offer ->", routedPeerJid, JSON.stringify(voipChild.attrs), "\n" + tree(voipChild));
+        }
         voip.handleSignalingOffer({
           payload: b64,
-          peerPlatform: Number(platform || 0),
+          peerPlatform: platform || "0", // WA sends names like "iphone"; Number() made NaN
           peerAppVersion: appVersion,
           epochId, timestamp,
           isOffline: offline,
@@ -467,6 +479,7 @@ export class SignalingBridge {
           throw new Error("decrypted signaling has no call.callKey");
         }
         enc.content = callKey;
+        if (process.env.CALL_DEBUG) console.log("[call] decrypted callKey", callKey.length, "bytes via", jid);
         return voipNode;
       } catch (err) {
         lastErr = err;

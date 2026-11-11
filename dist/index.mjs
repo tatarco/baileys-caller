@@ -13,6 +13,7 @@
 import { EventEmitter } from "node:events";
 import { randomBytes, createHmac } from "node:crypto";
 import { resolve } from "node:path";
+import { appendFileSync } from "node:fs";
 import { WasmEngine } from "./wasm-engine.mjs";
 import { RelayRtcTransport } from "./relay-transport.mjs";
 import { SignalingBridge } from "./signaling.mjs";
@@ -93,6 +94,12 @@ export class ActiveCall extends EventEmitter {
         catch { }
         this._forceEnd("hangup"); // resolves waitForEnd(); previously it hung forever
     };
+    /** Answer an inbound call (from the client's `incoming` event). */
+    accept = () => {
+        const status = this.engine.acceptCall(true, false);
+        if (status !== 0 && status !== undefined)
+            this.emit("error", new Error(`acceptCall failed: ${status}`));
+    };
     mute = (muted) => {
         try {
             this.engine.setMute(muted);
@@ -127,9 +134,10 @@ export class ActiveCall extends EventEmitter {
     };
 }
 /** Top-level client. Connects to WhatsApp and lets you place calls. */
-export class VoipClient {
+export class VoipClient extends EventEmitter {
     #config;
     #engine = null;
+    get engine() { return this.#engine; }
     #relay = null;
     #signaling = null;
     #sock = null;
@@ -143,6 +151,7 @@ export class VoipClient {
     #captureFramesPerChunk = 320;
     #feeder = null;
     constructor(config) {
+        super();
         this.#config = config;
     }
     /** Connect to WhatsApp and bring up the WASM VoIP stack. */
@@ -226,7 +235,10 @@ export class VoipClient {
             onIceRtt: (rttMs, ip, port) => this.#engine?.updateIceRtt(rttMs, ip, port),
         });
         this.#engine = new WasmEngine({
+            enableLogs: !!process.env.CALL_WASM_LOG,
             callbacks: {
+                onLog: (level, msg) => { if (process.env.CALL_WASM_LOG)
+                    appendFileSync(process.env.CALL_WASM_LOG, `${level} ${msg}\n`); },
                 onSignalingXmpp: (peerJid, callId, xmlPayload) => this.#signaling.sendSignaling(peerJid, callId, xmlPayload),
                 onCallEvent: (eventType, eventData) => this.#handleCallEvent(eventType, eventData),
                 sendDataToRelay: (data, ip, port) => this.#relay.send(data, ip, port),
@@ -249,6 +261,8 @@ export class VoipClient {
         }
         catch { }
         this.#sock.ws.on("CB:call", (node) => {
+            if (process.env.CALL_DEBUG)
+                console.log("[call] CB:call", node?.content?.[0]?.tag, JSON.stringify(node?.attrs));
             this.#signaling.processIncomingCall(node, this.#engine, this.#activeCall?.callId ?? "");
         });
         this.#sock.ws.on("CB:receipt", (node) => {
@@ -286,7 +300,7 @@ export class VoipClient {
         const callId = ("00" + randomBytes(16).toString("hex").slice(2)).toUpperCase();
         const call = new ActiveCall(callId, this.#engine, durationMs);
         call._audioSource = audioSource;
-        this.#activeCall = call;
+        this.#trackCall(call);
         this.#engine.startCall({
             peerJid: peerLid,
             peerPn: targetPnJid,
@@ -312,12 +326,29 @@ export class VoipClient {
         this.#sock = null;
     };
     // ─── private ──────────────────────────────────────────────────────────────
+    /** One call at a time; free the slot when it ends so the next call (in or out) can start. */
+    #trackCall = (call) => {
+        this.#activeCall = call;
+        call.once("ended", () => { if (this.#activeCall === call)
+            this.#activeCall = null; });
+    };
     #handleCallEvent = (eventType, eventData) => {
+        if (process.env.CALL_DEBUG && eventType !== 16)
+            console.log("[call] event", eventType, String(eventData ?? "").slice(0, 200));
         if (eventType === 16 && eventData) {
             try {
                 const parsed = JSON.parse(eventData);
                 const info = parsed.call_info ?? parsed.callInfo ?? {};
                 const callState = Number(info.call_state ?? info.callState ?? 0);
+                if (process.env.CALL_DEBUG)
+                    console.log("[call] info", eventData);
+                if (!this.#activeCall && callState === CallState.ReceivedCall) {
+                    const callId = String(info.call_id ?? info.callId ?? "");
+                    const peerJid = String(info.peer_jid ?? info.peerJid ?? info.creator_jid ?? "");
+                    const call = new ActiveCall(callId, this.#engine, 0);
+                    this.#trackCall(call);
+                    this.emit("incoming", call, { peerJid, info });
+                }
                 this.#activeCall?._updateState(callState);
             }
             catch { }
@@ -329,7 +360,8 @@ export class VoipClient {
             }
             catch { }
         }
-        else if (eventType === 2) {
+        else if (eventType === 2 && this.#activeCall?.state !== CallState.ReceivedCall) {
+            // Event 2 also fires right after an inbound offer; only treat it as a hangup once the call is past ringing.
             this.#activeCall?._forceEnd("remote_end");
         }
     };

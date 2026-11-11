@@ -14,7 +14,7 @@ Wraps WhatsApp Web's official VoIP WASM stack and uses [Baileys](https://github.
 - ✅ Mute / unmute / hang up
 - ❌ Group calls
 - ❌ Video
-- ❌ Inbound calls
+- ✅ Inbound 1:1 voice calls (`client.on("incoming")` → `call.accept()`)
 
 ## Requirements
 
@@ -73,6 +73,17 @@ Run the bundled example from a clone:
 ```bash
 npx tsx examples/call.mts ./auth 12345678901 ./hello.mp3
 ```
+
+## Inbound calls
+
+```ts
+client.on("incoming", (call, { peerJid }) => {
+  call.on("audio", (pcm) => { /* caller's audio */ });
+  call.accept();
+});
+```
+
+Debug: `CALL_DEBUG=1` logs signaling and call events; `CALL_WASM_LOG=<file>` writes the WASM stack's own log.
 
 ## API
 

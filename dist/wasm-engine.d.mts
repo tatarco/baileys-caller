@@ -44,6 +44,8 @@ export declare class WasmEngine {
     constructor(config?: WasmEngineConfig);
     initialize: () => Promise<void>;
     isInitialized: () => boolean;
+    /** Raw WASM module, for calling exports this wrapper does not cover yet. */
+    get raw(): any;
     destroy: () => void;
     initVoipStack: (selfJid: string, meUserJid: string, selfLid: string) => void;
     waitForVoipStackReady: () => Promise<void>;
@@ -58,12 +60,14 @@ export declare class WasmEngine {
         isFromDialer?: boolean;
         extraData?: Uint8Array;
     }) => unknown;
+    /** Accept the ringing inbound call. Mirrors WA Web's accept click (mic on, camera off). */
+    acceptCall: (audio?: boolean, video?: boolean) => number;
     endCall: (reason?: number, sendTerminate?: boolean) => void;
     setMute: (muted: boolean) => number;
     updateNetworkMedium: (networkMedium: number, networkMtu?: number) => void;
     handleSignalingOffer: (msg: {
         payload: string;
-        peerPlatform?: number;
+        peerPlatform?: string | number;
         peerAppVersion?: string;
         epochId?: string;
         timestamp?: string;
