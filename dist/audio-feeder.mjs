@@ -22,6 +22,8 @@ export class AudioFeeder {
     #emitTimer = null;
     #nextEmitAtMs = 0;
     #warmupUntilMs = 0;
+    #running = false;
+    #chunkSamples = 0;
     droppedChunks = 0;
     underflowChunks = 0;
     bytesProduced = 0;
@@ -39,6 +41,14 @@ export class AudioFeeder {
         const chunkSamples = this.framesPerChunk * this.channels;
         const chunkBytes = chunkSamples * Float32Array.BYTES_PER_ELEMENT;
         const chunkIntervalMs = (this.framesPerChunk / this.sampleRate) * 1000;
+        this.#running = true;
+        this.#chunkSamples = chunkSamples;
+        if (this.source === "live") {
+            // No ffmpeg: the app pushes PCM with enqueue(); the cadence timer sends silence when the queue is empty.
+            this.#nextEmitAtMs = 0;
+            this.#scheduleNext(chunkSamples, chunkIntervalMs);
+            return;
+        }
         const inputArgs = this.#resolveInputArgs();
         this.#proc = spawn("ffmpeg", [
             "-hide_banner",
@@ -78,7 +88,23 @@ export class AudioFeeder {
         this.#warmupUntilMs = Date.now() + DEFAULT_WARMUP_MS;
         this.#scheduleNext(chunkSamples, chunkIntervalMs);
     };
+    /** Live mode: queue mono PCM at the feeder's sample rate. */
+    enqueue = (pcm) => {
+        const n = this.#chunkSamples || this.framesPerChunk * this.channels;
+        for (let i = 0; i < pcm.length; i += n) {
+            const out = new Float32Array(n);
+            out.set(pcm.subarray(i, Math.min(i + n, pcm.length)));
+            this.#queue.push(out);
+        }
+    };
+    /** Drop everything queued (e.g. the caller started talking). */
+    clear = () => { this.#queue = []; };
+    /** Seconds of audio still queued. */
+    get queuedSeconds() {
+        return (this.#queue.length * (this.#chunkSamples || this.framesPerChunk)) / this.sampleRate;
+    }
     stop = () => {
+        this.#running = false;
         if (this.#emitTimer) {
             clearTimeout(this.#emitTimer);
             this.#emitTimer = null;
@@ -99,7 +125,7 @@ export class AudioFeeder {
         return ["-i", this.source];
     };
     #scheduleNext = (chunkSamples, chunkIntervalMs) => {
-        if (!this.#proc)
+        if (!this.#running)
             return;
         const now = Date.now();
         if (this.#nextEmitAtMs === 0)

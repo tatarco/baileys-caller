@@ -19,6 +19,8 @@ export class AudioFeeder {
   #emitTimer: NodeJS.Timeout | null = null;
   #nextEmitAtMs = 0;
   #warmupUntilMs = 0;
+  #running = false;
+  #chunkSamples = 0;
 
   droppedChunks = 0;
   underflowChunks = 0;
@@ -39,6 +41,15 @@ export class AudioFeeder {
     const chunkSamples = this.framesPerChunk * this.channels;
     const chunkBytes = chunkSamples * Float32Array.BYTES_PER_ELEMENT;
     const chunkIntervalMs = (this.framesPerChunk / this.sampleRate) * 1000;
+
+    this.#running = true;
+    this.#chunkSamples = chunkSamples;
+    if (this.source === "live") {
+      // No ffmpeg: the app pushes PCM with enqueue(); the cadence timer sends silence when the queue is empty.
+      this.#nextEmitAtMs = 0;
+      this.#scheduleNext(chunkSamples, chunkIntervalMs);
+      return;
+    }
 
     const inputArgs = this.#resolveInputArgs();
 
@@ -85,7 +96,26 @@ export class AudioFeeder {
     this.#scheduleNext(chunkSamples, chunkIntervalMs);
   };
 
+  /** Live mode: queue mono PCM at the feeder's sample rate. */
+  enqueue = (pcm: Float32Array): void => {
+    const n = this.#chunkSamples || this.framesPerChunk * this.channels;
+    for (let i = 0; i < pcm.length; i += n) {
+      const out = new Float32Array(n);
+      out.set(pcm.subarray(i, Math.min(i + n, pcm.length)));
+      this.#queue.push(out);
+    }
+  };
+
+  /** Drop everything queued (e.g. the caller started talking). */
+  clear = (): void => { this.#queue = []; };
+
+  /** Seconds of audio still queued. */
+  get queuedSeconds(): number {
+    return (this.#queue.length * (this.#chunkSamples || this.framesPerChunk)) / this.sampleRate;
+  }
+
   stop = (): void => {
+    this.#running = false;
     if (this.#emitTimer) {
       clearTimeout(this.#emitTimer);
       this.#emitTimer = null;
@@ -108,7 +138,7 @@ export class AudioFeeder {
   };
 
   #scheduleNext = (chunkSamples: number, chunkIntervalMs: number): void => {
-    if (!this.#proc) return;
+    if (!this.#running) return;
     const now = Date.now();
     if (this.#nextEmitAtMs === 0) this.#nextEmitAtMs = now;
     const delayMs = Math.max(0, this.#nextEmitAtMs - now);

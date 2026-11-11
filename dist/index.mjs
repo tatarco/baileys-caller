@@ -94,8 +94,38 @@ export class ActiveCall extends EventEmitter {
         catch { }
         this._forceEnd("hangup"); // resolves waitForEnd(); previously it hung forever
     };
+    /** @internal set by VoipClient once the WASM starts capture */
+    _feeder = null;
+    #pendingPlay = [];
+    /** @internal */
+    _attachFeeder = (feeder) => {
+        this._feeder = feeder;
+        if (feeder)
+            for (const p of this.#pendingPlay.splice(0))
+                feeder.enqueue(p);
+    };
+    /**
+     * Live mode (`audioSource: "live"`): queue mono PCM to speak into the call.
+     * Resampled linearly to the call's capture rate when `sampleRate` differs.
+     */
+    play = (pcm, sampleRate = 16000) => {
+        const target = this._captureRate;
+        const data = sampleRate === target ? pcm : resampleLinear(pcm, sampleRate, target);
+        if (this._feeder)
+            this._feeder.enqueue(data);
+        else
+            this.#pendingPlay.push(data);
+    };
+    /** Drop queued speech immediately (barge-in). */
+    stopPlayback = () => { this.#pendingPlay = []; this._feeder?.clear(); };
+    /** Seconds of speech still queued to play. */
+    get playbackQueuedSeconds() { return this._feeder?.queuedSeconds ?? 0; }
+    /** @internal */
+    _captureRate = 16000;
     /** Answer an inbound call (from the client's `incoming` event). */
-    accept = () => {
+    accept = (opts = {}) => {
+        if (opts.audioSource)
+            this._audioSource = opts.audioSource;
         const status = this.engine.acceptCall(true, false);
         if (status !== 0 && status !== undefined)
             this.emit("error", new Error(`acceptCall failed: ${status}`));
@@ -133,6 +163,16 @@ export class ActiveCall extends EventEmitter {
         this.#endResolver(reason);
     };
 }
+/** Linear resampler; good enough for speech. */
+export const resampleLinear = (pcm, from, to) => {
+    const out = new Float32Array(Math.floor((pcm.length * to) / from));
+    const step = from / to;
+    for (let i = 0; i < out.length; i++) {
+        const x = i * step, i0 = Math.floor(x), f = x - i0;
+        out[i] = (pcm[i0] ?? 0) * (1 - f) + (pcm[i0 + 1] ?? pcm[i0] ?? 0) * f;
+    }
+    return out;
+};
 /** Top-level client. Connects to WhatsApp and lets you place calls. */
 export class VoipClient extends EventEmitter {
     #config;
@@ -383,13 +423,17 @@ export class VoipClient extends EventEmitter {
         if (!this.#engine || !this.#capturePtr)
             return;
         const audioSource = this.#activeCall?._audioSource ?? "silence";
+        if (this.#activeCall)
+            this.#activeCall._captureRate = this.#captureSampleRate;
         this.#feeder = new AudioFeeder(this.#captureSampleRate, this.#captureChannels, this.#captureFramesPerChunk, (chunk) => {
             if (this.#engine && this.#capturePtr)
                 this.#engine.sendAudioData(chunk, this.#capturePtr);
         }, audioSource);
         this.#feeder.start();
+        this.#activeCall?._attachFeeder(this.#feeder);
     };
     #handleAudioCaptureStop = () => {
+        this.#activeCall?._attachFeeder(null);
         this.#feeder?.stop();
         this.#feeder = null;
         if (this.#engine && this.#capturePtr) {

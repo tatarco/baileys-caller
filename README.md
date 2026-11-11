@@ -83,6 +83,9 @@ client.on("incoming", (call, { peerJid }) => {
 });
 ```
 
+Talk back live: `call.accept({ audioSource: "live" })`, then `call.play(float32Pcm, sampleRate)` queues speech and
+`call.stopPlayback()` drops it (barge-in). Silence is sent whenever the queue is empty.
+
 Debug: `CALL_DEBUG=1` logs signaling and call events; `CALL_WASM_LOG=<file>` writes the WASM stack's own log.
 
 ## API

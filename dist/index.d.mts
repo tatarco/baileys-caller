@@ -12,6 +12,7 @@
  */
 import { EventEmitter } from "node:events";
 import { WasmEngine } from "./wasm-engine.mjs";
+import { AudioFeeder } from "./audio-feeder.mjs";
 import { CallState, type VoipSdkConfig } from "./types.mjs";
 export type { VoipSdkConfig, CallOptions, CallEvents, AudioConfig } from "./types.mjs";
 export { CallState } from "./types.mjs";
@@ -25,8 +26,25 @@ export declare class ActiveCall extends EventEmitter {
     constructor(callId: string, engine: WasmEngine, durationMs: number);
     get state(): CallState;
     end: () => void;
+    /** @internal set by VoipClient once the WASM starts capture */
+    _feeder: AudioFeeder | null;
+    /** @internal */
+    _attachFeeder: (feeder: AudioFeeder | null) => void;
+    /**
+     * Live mode (`audioSource: "live"`): queue mono PCM to speak into the call.
+     * Resampled linearly to the call's capture rate when `sampleRate` differs.
+     */
+    play: (pcm: Float32Array, sampleRate?: number) => void;
+    /** Drop queued speech immediately (barge-in). */
+    stopPlayback: () => void;
+    /** Seconds of speech still queued to play. */
+    get playbackQueuedSeconds(): number;
+    /** @internal */
+    _captureRate: number;
     /** Answer an inbound call (from the client's `incoming` event). */
-    accept: () => void;
+    accept: (opts?: {
+        audioSource?: string;
+    }) => void;
     mute: (muted: boolean) => void;
     waitForEnd: () => Promise<string>;
     /** @internal — called by VoipClient on WASM call-state change */
@@ -36,6 +54,8 @@ export declare class ActiveCall extends EventEmitter {
     /** @internal */
     _forceEnd: (reason: string) => void;
 }
+/** Linear resampler; good enough for speech. */
+export declare const resampleLinear: (pcm: Float32Array, from: number, to: number) => Float32Array;
 /** Top-level client. Connects to WhatsApp and lets you place calls. */
 export declare class VoipClient extends EventEmitter {
     #private;
