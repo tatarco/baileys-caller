@@ -436,6 +436,12 @@ export class VoipClient extends EventEmitter {
         const bytes = chunkSamples * Float32Array.BYTES_PER_ELEMENT;
         if (this.#capturePtr && bytes === this.#captureChunkBytes)
             return; // restart with the same shape
+        // Shape changed: the kept feeder emits old-sized chunks, so rebuild it on the next start.
+        if (this.#feeder) {
+            this.#activeCall?._attachFeeder(null);
+            this.#feeder.stop();
+            this.#feeder = null;
+        }
         if (this.#capturePtr) {
             try {
                 this.#engine.free(this.#capturePtr);
@@ -458,8 +464,10 @@ export class VoipClient extends EventEmitter {
         if (this.#activeCall)
             this.#activeCall._captureRate = this.#captureSampleRate;
         this.#feeder = new AudioFeeder(this.#captureSampleRate, this.#captureChannels, this.#captureFramesPerChunk, (chunk) => {
-            if (this.#engine && this.#capturePtr)
+            // Never write past the allocation (guards any feeder/buffer shape mismatch).
+            if (this.#engine && this.#capturePtr && chunk.byteLength <= this.#captureChunkBytes) {
                 this.#engine.sendAudioData(chunk, this.#capturePtr);
+            }
         }, audioSource);
         this.#feeder.start();
         this.#activeCall?._attachFeeder(this.#feeder);
