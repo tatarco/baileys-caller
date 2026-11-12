@@ -377,8 +377,12 @@ export class VoipClient extends EventEmitter {
     /** One call at a time; free the slot when it ends so the next call (in or out) can start. */
     #trackCall = (call) => {
         this.#activeCall = call;
-        call.once("ended", () => { if (this.#activeCall === call)
-            this.#activeCall = null; });
+        call.once("ended", () => {
+            if (this.#activeCall !== call)
+                return;
+            this.#teardownCapture();
+            this.#activeCall = null;
+        });
     };
     #handleCallEvent = (eventType, eventData) => {
         if (process.env.CALL_DEBUG && eventType !== 16)
@@ -417,19 +421,39 @@ export class VoipClient extends EventEmitter {
             this.#activeCall?._forceEnd("remote_end");
         }
     };
+    // The WASM can restart capture mid-call (call event 49, audio_restart) and its init/start/stop callbacks
+    // do not arrive in a safe order for us: tearing down on stop left the call with no feeder (caller hears
+    // nothing). So capture is owned by the call: one buffer and one feeder per call, torn down when it ends.
     #handleAudioCaptureInit = (config) => {
         if (!this.#engine)
             return;
+        if (process.env.CALL_DEBUG)
+            console.log("[call] capture init", JSON.stringify(config));
         this.#captureSampleRate = config.sampleRate || 16000;
         this.#captureChannels = config.channels || 1;
         this.#captureFramesPerChunk = config.framesPerChunk || 320;
         const chunkSamples = this.#captureFramesPerChunk * this.#captureChannels;
-        this.#captureChunkBytes = chunkSamples * Float32Array.BYTES_PER_ELEMENT;
-        this.#capturePtr = this.#engine.malloc(this.#captureChunkBytes);
+        const bytes = chunkSamples * Float32Array.BYTES_PER_ELEMENT;
+        if (this.#capturePtr && bytes === this.#captureChunkBytes)
+            return; // restart with the same shape
+        if (this.#capturePtr) {
+            try {
+                this.#engine.free(this.#capturePtr);
+            }
+            catch { }
+        }
+        this.#captureChunkBytes = bytes;
+        this.#capturePtr = this.#engine.malloc(bytes);
     };
     #handleAudioCaptureStart = () => {
+        if (process.env.CALL_DEBUG)
+            console.log("[call] capture start", this.#feeder ? "(feeder kept)" : "");
         if (!this.#engine || !this.#capturePtr)
             return;
+        if (this.#feeder) {
+            this.#activeCall?._attachFeeder(this.#feeder);
+            return;
+        }
         const audioSource = this.#activeCall?._audioSource ?? "silence";
         if (this.#activeCall)
             this.#activeCall._captureRate = this.#captureSampleRate;
@@ -441,6 +465,12 @@ export class VoipClient extends EventEmitter {
         this.#activeCall?._attachFeeder(this.#feeder);
     };
     #handleAudioCaptureStop = () => {
+        if (process.env.CALL_DEBUG)
+            console.log("[call] capture stop", this.#activeCall ? "(call live, kept)" : "");
+        if (!this.#activeCall)
+            this.#teardownCapture();
+    };
+    #teardownCapture = () => {
         this.#activeCall?._attachFeeder(null);
         this.#feeder?.stop();
         this.#feeder = null;
@@ -450,6 +480,7 @@ export class VoipClient extends EventEmitter {
             }
             catch { }
             this.#capturePtr = 0;
+            this.#captureChunkBytes = 0;
         }
     };
 }
