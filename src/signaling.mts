@@ -304,6 +304,7 @@ export class SignalingBridge {
     callbackPeerJid: string,
   ): Promise<void> => {
     const stanzaId = this.#sock.generateMessageTag();
+    if (process.env.CALL_DEBUG) console.log("[call] send", signalingTag, "to", routeTo);
     await this.#sock.sendNode({
       tag: "call",
       attrs: { to: routeTo, id: stanzaId },
@@ -313,6 +314,7 @@ export class SignalingBridge {
     void (async () => {
       try {
         const ackNode = await this.#sock.waitForMessage(stanzaId, ACK_TIMEOUT_MS);
+        if (process.env.CALL_DEBUG) console.log("[call] ack", signalingTag, ackNode ? JSON.stringify(ackNode.attrs) : "timeout", (ackNode?.content ?? []).map?.((c: any) => c.tag));
         if (!ackNode || !this.#voip) return;
         const { encodeBinaryNode } = this.#baileys;
         const ackPayload = Buffer.from(encodeBinaryNode(ackNode)).toString("base64");
@@ -572,6 +574,7 @@ export class SignalingBridge {
   // ─── private — JID utilities ──────────────────────────────────────────────
 
   #toBareJid = (jid: string): string => {
+    if (jid.endsWith("@call")) return jid;
     const { jidDecode, jidEncode } = this.#baileys;
     const decoded = jidDecode(jid);
     if (!decoded?.user) return jid;
@@ -634,6 +637,8 @@ export class SignalingBridge {
   #resolveOutboundPeerJid = (callId: string, wasmPeerJid: string): string => {
     const peerJid = String(wasmPeerJid ?? "").trim();
     if (!peerJid || !callId) return peerJid;
+    // Group calls are addressed to the call itself (`<call-id>@call`); never reroute those to a device.
+    if (peerJid.endsWith("@call")) return peerJid;
     return this.#remoteDevicePeerByCallId.get(callId) ?? peerJid;
   };
 
