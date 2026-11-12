@@ -304,10 +304,16 @@ export class SignalingBridge {
         // Baileys decodes `user:0@lid` (AD_JID) as `user@lid`, and re-encodes that as a JID_PAIR the
         // WASM reads back as `user:0@s.whatsapp.net` -> "mismatched peer id and creator id" -> offer dropped.
         // An explicit `:0` makes Baileys re-encode it as an AD_JID with the LID domain.
-        const creator = voipChild.attrs["call-creator"];
-        if (typeof creator === "string" && creator.endsWith("@lid") && !creator.includes(":")) {
-            voipChild.attrs["call-creator"] = creator.replace("@lid", ":0@lid");
-        }
+        // Applies to every LID jid in the stanza (call-creator, and group_info's <user>/<device> jids).
+        const fixLids = (n) => {
+            for (const [k, v] of Object.entries(n.attrs ?? {})) {
+                if (typeof v === "string" && /^[^:@]+@lid$/.test(v))
+                    n.attrs[k] = v.replace("@lid", ":0@lid");
+            }
+            if (Array.isArray(n.content))
+                n.content.forEach(fixLids);
+        };
+        fixLids(voipChild);
         let usableNode = voipChild;
         if (getBinaryNodeChild(voipChild, "enc")) {
             usableNode = await this.#maybeDecryptEnc(voipChild, senderDeviceJid);
