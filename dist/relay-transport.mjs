@@ -308,6 +308,13 @@ export class RelayRtcTransport {
         try {
             await promise;
         }
+        catch (e) {
+            // A relay torn down mid-setup (common in group calls) must fail that relay, not crash the process.
+            if (process.env.CALL_DEBUG)
+                console.error("[call] relay connect failed:", e?.message);
+            connection.state = "failed";
+            this.#closePeerObjects(connection);
+        }
         finally {
             connection.connectPromise = null;
         }
